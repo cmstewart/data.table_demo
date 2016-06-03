@@ -1,0 +1,160 @@
+---
+title: "Big-ish Data Munging in `R`"
+subtitle: "Introduction to data table"
+author: "Christopher M. Stewart"
+date: "`r Sys.Date()`"
+output:
+  tufte::tufte_html: default
+  tufte::tufte_handout:
+    citation_package: natbib
+    latex_engine: xelatex
+  tufte::tufte_book:
+    citation_package: natbib
+    latex_engine: xelatex
+bibliography: skeleton.bib
+link-citations: yes
+---
+
+<br><br>
+
+```{r setup, include=FALSE}
+library(tufte)
+# invalidate cache when the tufte version changes
+knitr::opts_chunk$set(tidy = FALSE, cache.extra = packageVersion('tufte'))
+options(htmltools.dir.version = FALSE)
+```
+
+## Introduction
+
+`r newthought('So, what is')`^ [data.table](https://github.com/Rdatatable/data.table/wiki)? It's basically an extension of data frame that's optimized for bigger data sets. That means that it inherits from data frame, meaning that anything that works with data frame should work for data.table.
+ 
+<br><br>
+ 
+## Munging with a *very* large table, by R's standards at least...
+ 
+Let's make a data table with lots of different stuff... and  13.45 million rows and 8 columns!
+
+```{r make_data, echo = TRUE, include = TRUE, cache = TRUE}
+
+## load required packages
+require(data.table)
+
+## generate fake data
+data <- as.data.table(matrix(0, ncol = 8, nrow = 13450000))
+
+data$V1 <- sample(10000, size = nrow(data), replace = TRUE)
+data$V2 <- rnorm(n = nrow(data), mean = 0, sd = 1)
+data$V3 <- sample( LETTERS[1:4], nrow(data), replace=TRUE, prob=c(0.1, 0.2, 0.65, 0.05) )
+data$V4 <- rbinom(nrow(data), size = 1, prob = .5)
+data$V5 <- rnorm(n=nrow(data), mean=-.5, sd=1); ind <- which(data$V5 %in% sample(data$V5, 10000)); data$V5[ind]<-NA
+data$V6 <- Sys.Date() + sort(sample(1:100, nrow(data), replace = TRUE))
+data$V7 <- sample( LETTERS[19:22], nrow(data), replace=TRUE, prob=c(0.2, 0.1, 0.05, 0.65) )
+data$V8 <- Sys.Date() + sort(sample(1:10, nrow(data), replace = TRUE))
+ 
+```
+ 
+Cool... so, what do we need to do before we can actually work with the data?
+ 
+<br><br>
+ 
+## Setting the key
+ 
+When working with data.table, first step is typically to "set a key":
+ 
+1. "setkey() sorts a data.table and marks it as sorted. The sorted columns are the key. The key can be any columns in any order. The columns are sorted in ascending order always. The table  is changed by reference. No copy is made at all, other than temporary working memory as large as one column."
+ 
+What _exactly_ is happening when I set a key?
+ 
+1. "Ordering (or sorting) is essential for most data.table operations. Therefore, it's important to have "ordering" as fast as possible. base:::order doesn't really cut it. Although for integers, base does have a fast (improperly named as radix sort) counting sort (which has some restrictions like range <= 1e5 and no -ve values)... data.table's setkey internally uses fastorder which implements a counting sort on characters by efficiently using the internal R string cache and since v1.8.11, a 3-pass radix order for integers, 6-pass radix order for double (numeric) adapted from Michael Herf's article+code (which was inspired by Pierre Tardiman's article)... data.table uses radix sorting. This is significantly faster than other sort algorithms. Radix is specically for integers only, see  ?base::sort.list(x,method="radix"). This is also one  > reason why  setkey() is quick. When no key is set, or we group in a different order from that of the key, we call it an ad hoc by."
+
+^[For more information on keys, please relevant [stackoverflow post](http://stackoverflow.com/questions/20039335/what-is-the-purpose-of-setting-a-key-in-data-table).]
+ 
+<br><br>
+ 
+## Great. Can we get to some munging now? Sure!
+ 
+Let's start with some basic munging (e.g. 'gsub') with a view towards correctly formatting our date columns.
+
+```{r correct_column_classes, echo = TRUE, include = TRUE, cache = TRUE}
+ 
+## clean up, dump RAM
+rm(ind); invisible(gc())
+ 
+## insert slightly more meaningful column names
+setnames(data, c("a_number", "a_small_number", "a_letter","one_or_zero", "a_negative_number", "a_date", "a_different_letter", "another_date"))
+
+## set a key
+setkey(data, a_number)
+
+## format date columns correctly
+system.time(data$a_date <- as.Date(data$a_date, format = '%Y%m%d'))
+system.time(data$another_date <- as.Date(data$another_date, format = '%Y%m%d'))
+
+## format factor columns correctly
+factors <- c("a_letter", "a_date", "another_date")
+system.time(data[, as.factor(factors), with = FALSE])
+
+```
+ 
+How about subsetting?
+ 
+```{r subsetting, echo = TRUE}
+## clean up
+rm(factors)
+
+## subset one column of our fake data set
+system.time(subset_data_1 <- data[, .(one_or_zero)])
+ 
+### subset a single month's worth of data
+system.time(april_subset <- subset(data, a_date >= "2016-04-01" & a_date <= "2016-04-30"))
+ 
+```
+ 
+OK, subsetting with a 14.45 million row dataset in _~1-2 seconds_. Even the haters will have to admit, that's pretty dern fast!
+ 
+<br><br>
+ 
+## Inline code reference
+ 
+But why did we do that? For real reporting, it's very handy to be able to reference R objects in text. Here's a quick example:
+ 
+<br>
+ 
+* "Loading this data into R, we see that `r format(nrow(april_subset), big.mark = ",", scientific = FALSE)` things happened in April 2016. On slide 87 of `Some Powerpoint Given to Us by an Exec`, we see a total of `r format((123125+987471+172981+981539), big.mark = ",", scientific = FALSE)` things happening in April 2016. This gives a discrepancy of `r format(nrow(april_subset)-(123125+987471+172981+981539), big.mark = ",", scientific = FALSE)` members between the results of our query and the documentation provided by business. Furthermore, in the month of April 2016, the data retrieved by our query indicates `r paste0("$", (format((sum(as.numeric(data$a_number))), big.mark = ",", scientific = FALSE)))` in sales for..."
+ 
+<br>
+ 
+That's pretty cool, I guess, even if the numbers are obviously fake. But show us something amazing that data.table can do already!!!
+ 
+<br><br>
+ 
+## Slightly more advanced data.table operations
+
+How about adding in an "index" column aggregating on an existing column? Or what if you wanted to fit models regressing levels of a categorical variable on the rest of the data? 
+ 
+```{r add_column_with_N_of_orders_by_day, echo = TRUE}
+
+## clean up, load required packages and set options
+rm(april_subset, subset_data_1, factors)
+require(printr)
+options(datatable.print.nrows=0)
+ 
+## add column indicating number of Club Pickup orders by day
+system.time(data[ , some_qty_by_date := .N, by = list(a_date)])
+ 
+## take out that column by name
+data[, 'some_qty_by_date' := NULL]
+ 
+## subset the 'a_letter' variable, regress "A" and "C" on the rest of the data
+setkey(data, a_letter); options(datatable.print.nrows=0)
+system.time(data_a_letter_a_or_c <- data[a_letter %in% c("A","C")])
+
+system.time(my_regression <- data_a_letter_a_or_c[, as.list(coef(lm(a_number~a_date))), by = a_letter])
+
+printr(my_regression)
+ 
+```
+ 
+<br><br>
+ 
+This is really just the tip of the proverbial iceberg! Thank you very much for your rapt attention, or at least for not throwing things ;-) I hope that you found this useful and would be thrilled to take any questions you might have.
